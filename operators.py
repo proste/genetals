@@ -8,15 +8,13 @@ class RouletteWheelSelection(OperatorBase):
     def __init__(self, unfiltered_op: OperatorBase):
         super(RouletteWheelSelection, self).__init__(unfiltered_op)
 
-    def _operation(self, ga: GeneticAlgorithm, *input_populations: Population):
-        unfiltered = input_populations[0]
-
+    def _operation(self, ga: GeneticAlgorithm, unfiltered_pop: Population):
         choice = np.random.choice(
-            np.arange(unfiltered.size), size=unfiltered.size,
-            p=(unfiltered.fitnesses / unfiltered.fitness.sum)
+            np.arange(unfiltered_pop.size), size=unfiltered_pop.size,
+            p=(unfiltered_pop.fitnesses / unfiltered_pop.fitnesses.sum)
         )
 
-        return Population(unfiltered.individuals[choice, ...], ga)
+        return Population(unfiltered_pop.individuals[choice, ...], ga)
 
 
 class TournamentSelection(OperatorBase):
@@ -25,17 +23,15 @@ class TournamentSelection(OperatorBase):
 
         self._match_size = match_size
 
-    def _operation(self, ga: GeneticAlgorithm, *input_populations: Population):
-        unfiltered = input_populations[0]
+    def _operation(self, ga: GeneticAlgorithm, unfiltered_pop: Population):
+        match_board = np.empty((unfiltered_pop.size, self._match_size), dtype=np.int)
+        for i in range(unfiltered_pop.size):
+            match_board[i] = np.random.choice(unfiltered_pop.size, size=self._match_size)
 
-        match_board = np.empty((unfiltered.size, self._match_size), dtype=np.int)
-        for i in range(unfiltered.size):
-            match_board[i] = np.random.choice(unfiltered.size, size=self._match_size)
+        scores = unfiltered_pop.fitnesses[match_board]
+        chosen = match_board[range(unfiltered_pop.size), scores.argmax(axis=-1)]
 
-        scores = unfiltered.fitnesses[match_board]
-        chosen = match_board[range(unfiltered.size), scores.argmax(axis=-1)]
-
-        return Population(unfiltered.individuals[chosen], ga)
+        return Population(unfiltered_pop.individuals[chosen], ga)
 
 
 class OnePointXover(OperatorBase):
@@ -45,8 +41,8 @@ class OnePointXover(OperatorBase):
         self.xover_prob = xover_prob
 
     # TODO maybe change
-    def _operation(self, ga: GeneticAlgorithm, *input_populations: Population):
-        parents = input_populations[0].individuals
+    def _operation(self, ga: GeneticAlgorithm, parents_pop: Population):
+        parents = parents_pop.individuals
         offspring = parents.copy()
 
         for p_i in range(0, len(parents), 2):
@@ -65,8 +61,8 @@ class FlipMutation(OperatorBase):
         self._mut_prob = mut_prob
         self._gene_mut_prob = gene_mut_prob
 
-    def _operation(self, ga: GeneticAlgorithm, *input_populations: Population):
-        originals = input_populations[0].individuals
+    def _operation(self, ga: GeneticAlgorithm, original_pop: Population):
+        originals = original_pop.individuals
         mutated = originals.copy()
 
         # TODO try to vectorize - maybe some bit mask?
@@ -95,15 +91,14 @@ class BiasedMutation(OperatorBase):
         self._l_bound = l_bound
         self._u_bound = u_bound
 
-    def _operation(self, ga, *input_populations):
-        population = input_populations[0]
-        individuals = population.individuals
+    def _operation(self, ga: GeneticAlgorithm, original_pop: Population):
+        individuals = original_pop.individuals
 
-        mutant_count = int(population.size * self._individual_mut_ratio)
+        mutant_count = int(original_pop.size * self._individual_mut_ratio)
         individual_size = np.prod(individuals.shape[1:])
         gene_count = int(individual_size * self._gene_mut_ratio)
 
-        mutant_index = np.random.choice(population.size, size=mutant_count, replace=False)
+        mutant_index = np.random.choice(original_pop.size, size=mutant_count, replace=False)
 
         gene_index = np.empty(shape=(mutant_count, gene_count), dtype=np.int)
         for row in range(mutant_count):
@@ -126,8 +121,8 @@ class TwoPointXover(OperatorBase):
         self._xover_prob = xover_prob
         self._axis = axis if (not isinstance(axis, int)) else (axis,)
 
-    def _operation(self, ga: GeneticAlgorithm, *input_populations: Population) -> Population:
-        parents = input_populations[0].individuals
+    def _operation(self, ga: GeneticAlgorithm, parents_pop: Population) -> Population:
+        parents = parents_pop.individuals
         offspring = parents.copy()
         individual_shape = offspring.shape[1:]
 
@@ -148,9 +143,7 @@ class ShuffleOperator(OperatorBase):
     def __init__(self, input_op: OperatorBase):
         super(ShuffleOperator, self).__init__(input_op)
 
-    def _operation(self, ga: GeneticAlgorithm, *input_populations: Population):
-        input_pop = input_populations[0]
-
+    def _operation(self, ga: GeneticAlgorithm, input_pop: Population):
         output_individuals = np.random.permutation(input_pop.individuals)
 
         return Population(output_individuals, ga)
@@ -160,15 +153,12 @@ class NSGAOperator(OperatorBase):
     def __init__(self, parents_op: OperatorBase, offspring_op: OperatorBase):
         super(NSGAOperator, self).__init__(parents_op, offspring_op)
 
-    def _operation(self, ga: GeneticAlgorithm, *input_populations: Population):
-        parents = input_populations[0]
-        offspring = input_populations[1]
-
+    def _operation(self, ga: GeneticAlgorithm, parents_pop: Population, offspring_pop: Population):
         # merge parents with offspring
-        individuals = np.concatenate((parents.individuals, offspring.individuals))
-        fitnesses = np.concatenate((parents.fitnesses, offspring.fitnesses))
+        individuals = np.concatenate((parents_pop.individuals, offspring_pop.individuals))
+        fitnesses = np.concatenate((parents_pop.fitnesses, offspring_pop.fitnesses))
         pool_size = len(individuals)
-        pop_size = parents.size
+        pop_size = parents_pop.size
 
         fitnesses_count = fitnesses.shape[1]
         fitnesses_rank_to_index = np.argsort(fitnesses, axis=0)
@@ -244,18 +234,16 @@ class Elitism(OperatorBase):
 
         self._elite_proportion = elite_proportion
 
-    def _operation(self, ga: GeneticAlgorithm, *input_populations: Population) -> Population:
+    def _operation(self, ga: GeneticAlgorithm, original_pop: Population, evolved_pop: Population) -> Population:
         elite_size = int(ga.population_size * self._elite_proportion)
-        original = input_populations[0]
-        evolved = input_populations[1]
-        result = np.empty_like(original.individuals)
+        result = np.empty_like(original_pop.individuals)
 
         # assign all but elite_size with random evolved individuals
-        result[elite_size:] = evolved.individuals[
-            np.random.choice(np.arange(evolved.size), evolved.size - elite_size, replace=False)
+        result[elite_size:] = evolved_pop.individuals[
+            np.random.choice(np.arange(evolved_pop.size), evolved_pop.size - elite_size, replace=False)
         ]
 
         # assign elite_size individuals with best of original individuals
-        result[:elite_size] = original.individuals[original.fitnesses.argsort()[-elite_size:]]
+        result[:elite_size] = original_pop.individuals[original_pop.fitnesses.argsort()[-elite_size:]]
 
         return Population(result, ga)
